@@ -1,0 +1,36 @@
+# Multi-platform AOT build Dockerfile
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS builder
+
+# Install native compilation toolchain for AOT
+RUN apt-get update && apt-get install -y \
+    clang \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Accept build argument for .NET RID
+ARG DOTNET_RID=linux-x64
+
+WORKDIR /src
+COPY SqlInfoStreamer.csproj .
+RUN dotnet restore SqlInfoStreamer.csproj
+
+COPY . .
+
+# Build for specified platform
+RUN echo "Building for $DOTNET_RID" && \
+    dotnet publish SqlInfoStreamer.csproj \
+    -c Release \
+    -r $DOTNET_RID \
+    --self-contained \
+    -o /output && \
+    if [ "$DOTNET_RID" = "win-x64" ]; then \
+        cp /output/SqlInfoStreamer.exe /output/sql-info-streamer-$DOTNET_RID.exe; \
+    else \
+        cp /output/SqlInfoStreamer /output/sql-info-streamer-$DOTNET_RID; \
+    fi
+
+# Final stage to extract binaries
+FROM alpine:latest AS extractor
+WORKDIR /binaries
+COPY --from=builder /output/sql-info-streamer-* ./
+RUN ls -la
