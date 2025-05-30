@@ -5,7 +5,7 @@ A lightweight .NET 9 AOT console application that executes SQL Server stored pro
 ## Features
 
 - **Real-time progress**: Captures SQL Server InfoMessage events during execution
-- **Lightweight**: Native AOT compiled to ~15MB single binary
+- **Lightweight**: Native AOT compiled to ~28MB single binary
 - **Unix-style**: Reads SQL from stdin, writes JSON events to stdout
 - **Docker buildable**: No need for local .NET SDK installation
 - **Fast startup**: Native compilation means instant startup
@@ -13,6 +13,7 @@ A lightweight .NET 9 AOT console application that executes SQL Server stored pro
 ## Usage
 
 ### Basic Usage
+
 ```bash
 # Using --sql argument with SQL text
 sql-info-streamer -c "Server=localhost;Database=MyDB;..." --sql "EXEC MyStoredProc @param1='value'"
@@ -26,6 +27,7 @@ echo "EXEC LongRunningProc" | sql-info-streamer
 ```
 
 ### With Timeout and Cancellation
+
 ```bash
 # 30 minute timeout
 sql-info-streamer -t 1800 --sql "EXEC VeryLongProc"
@@ -38,6 +40,7 @@ sql-info-streamer --sql long-running-script.sql
 ```
 
 ### Building with Docker
+
 ```bash
 # Build the image
 docker build -t sql-info-streamer .
@@ -60,12 +63,14 @@ Each line is a JSON object:
 ```
 
 ### Event Types
+
 - `started`: Execution began
 - `info`: InfoMessage from stored procedure (PRINT statements, etc.)
 - `completed`: Successful completion
 - `error`: SQL error or execution failure
 
 ### Properties
+
 - `timestamp`: UTC timestamp in ISO 8601 format
 - `type`: Event type (started/info/completed/error)
 - `message`: The actual message text
@@ -107,16 +112,9 @@ cat test-progress.sql | sql-info-streamer -c "your-connection-string"
 # Expected output: JSON events showing progress messages every few seconds
 ```
 
-The test will:
-1. Print initialization message
-2. Wait 2 seconds, print 25% progress
-3. Wait 3 seconds, print 50% progress
-4. Wait 2 seconds, print 75% progress
-5. Wait 1 second, print completion
-
 ## Easy Multi-Platform Building with Docker
 
-### One-Command Multi-Platform Build
+### build.sh
 
 ```bash
 # Build for multiple platforms at once
@@ -133,71 +131,23 @@ This creates ready-to-deploy binaries in the project root:
 1. **Linux x64** - Built using Docker with `--platform linux/amd64`
 2. **Linux ARM64** - Built using Docker with `--platform linux/arm64` 
 3. **macOS ARM64** - Built locally using dotnet CLI (if available)
-4. **Windows** - Requires Windows environment (see instructions below)
+4. **Windows** - Build locally using dotnet CLI (see instructions below)
 
 ### Platform-Specific Instructions
 
 **For Windows builds** (run on Windows):
-```bash
-dotnet publish -c Release -r win-x64 --self-contained
+
+It's not enough to install .NET 9 SDK, Microsoft VisualStudio 2022 is also required 
+with the "Desktop development with C++" workload.
+
+```cmd
+dotnet publish -c Release -r win-x64 --self-contained -o .
 ```
 
-**For macOS x64 builds** (run on macOS):
-```bash
-dotnet publish -c Release -r osx-x64 --self-contained
-```
+**For macOS arm64 builds** (run on macOS):
 
-### What the Docker Build Does
-
-1. **No local .NET SDK required** - Uses Docker with .NET 9 SDK
-2. **Native AOT compilation** - ~28MB self-contained executables  
-3. **Multi-platform** - Builds Linux x64 and ARM64 automatically
-4. **Ready to deploy** - No dependencies, just copy and run
-
-### Deploy the Binaries
-
-Each binary is completely self-contained:
-- **No .NET runtime required** on target system
-- **Fast startup** - Native compilation, no JIT
-- **Single file** - Easy to deploy and distribute
+Install the .NET 9 SDK.
 
 ```bash
-# Copy to Linux server
-scp sql-info-streamer-linux-x64 user@server:/usr/local/bin/
-
-# Copy to Windows server
-scp sql-info-streamer-win-x64.exe user@server:C:\tools\
-
-# Use in minimal container
-FROM scratch
-COPY sql-info-streamer-linux-x64 /sql-info-streamer
-ENTRYPOINT ["/sql-info-streamer"]
-```
-
-### Manual Docker Build (Advanced)
-
-If you prefer manual control:
-
-```bash
-# Build for specific platform
-docker build -f Dockerfile.build --target extractor -t sql-builder .
-
-# Extract binary
-docker run --rm sql-builder cat /binaries/sql-info-streamer-linux-x64 > sql-info-streamer-linux-x64
-chmod +x sql-info-streamer-linux-x64
-```
-
-## Building Locally
-
-If you have .NET 9 SDK installed:
-
-```bash
-# Linux x64
-dotnet publish -c Release -r linux-x64 --self-contained
-
-# Linux ARM64
-dotnet publish -c Release -r linux-arm64 --self-contained
-
-# Windows x64
-dotnet publish -c Release -r win-x64 --self-contained
+dotnet publish -c Release -r osx-arm64 --self-contained -o .
 ```
