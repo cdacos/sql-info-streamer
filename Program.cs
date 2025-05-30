@@ -96,14 +96,69 @@ internal class Program
 
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
-            // Process all result sets to ensure InfoMessage events are fired in real-time
+            var resultSets = new List<SqlResultSet>();
+            
+            // Process all result sets and collect data
             do
             {
+                var resultSet = new SqlResultSet();
+                
+                // Get column information
+                for (int i = 0; i < reader.FieldCount; i++)
+                {
+                    resultSet.Columns.Add(reader.GetName(i));
+                }
+                
+                // Read all rows in this result set
                 while (await reader.ReadAsync(cancellationToken))
                 {
-                    // Read through all rows to trigger InfoMessage events
+                    var row = new Dictionary<string, string?>();
+                    for (int i = 0; i < reader.FieldCount; i++)
+                    {
+                        string? value = null;
+                        if (!reader.IsDBNull(i))
+                        {
+                            // Convert all values to strings for reliable JSON serialization
+                            var rawValue = reader.GetValue(i);
+                            value = rawValue switch
+                            {
+                                DateTime dt => dt.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+                                DateTimeOffset dto => dto.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+                                TimeSpan ts => ts.ToString(),
+                                byte[] bytes => Convert.ToBase64String(bytes),
+                                _ => rawValue.ToString()
+                            };
+                        }
+                        row[reader.GetName(i)] = value;
+                    }
+                    resultSet.Rows.Add(row);
                 }
+                
+                resultSet.RowCount = resultSet.Rows.Count;
+                
+                // Only add result sets that have columns (ignore empty result sets from statements like USE database)
+                if (resultSet.Columns.Count > 0)
+                {
+                    resultSets.Add(resultSet);
+                }
+                
             } while (await reader.NextResultAsync(cancellationToken));
+
+            // Output the results
+            if (resultSets.Count > 0)
+            {
+                var resultData = new SqlResultData
+                {
+                    Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+                    Type = "results",
+                    ResultSets = resultSets,
+                    TotalResultSets = resultSets.Count
+                };
+
+                var json = JsonSerializer.Serialize(resultData, EventDataContext.Default.SqlResultData);
+                Console.WriteLine(json);
+                Console.Out.Flush();
+            }
 
             WriteEvent("completed", "SQL execution completed successfully");
         }
@@ -225,9 +280,35 @@ public class EventData
     [JsonPropertyName("errorNumber")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? ErrorNumber { get; set; }
+
+    [JsonPropertyName("resultSet")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SqlResultSet? ResultSet { get; set; }
+}
+
+public class SqlResultSet
+{
+    [JsonPropertyName("columns")] public List<string> Columns { get; set; } = new();
+
+    [JsonPropertyName("rows")] public List<Dictionary<string, string?>> Rows { get; set; } = new();
+
+    [JsonPropertyName("rowCount")] public int RowCount { get; set; }
+}
+
+public class SqlResultData
+{
+    [JsonPropertyName("timestamp")] public string Timestamp { get; set; } = "";
+
+    [JsonPropertyName("type")] public string Type { get; set; } = "";
+
+    [JsonPropertyName("resultSets")] public List<SqlResultSet> ResultSets { get; set; } = new();
+
+    [JsonPropertyName("totalResultSets")] public int TotalResultSets { get; set; }
 }
 
 [JsonSerializable(typeof(EventData))]
+[JsonSerializable(typeof(SqlResultSet))]
+[JsonSerializable(typeof(SqlResultData))]
 internal partial class EventDataContext : JsonSerializerContext
 {
 }
