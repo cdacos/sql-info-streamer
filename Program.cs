@@ -1,5 +1,6 @@
 #region
 
+using System.Data;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Data.SqlClient;
@@ -80,6 +81,40 @@ internal class Program
             await using var command = new SqlCommand(sql, connection);
             command.CommandTimeout = timeoutSeconds;
 
+            // Pre-parse SQL to identify output parameters
+            var outputParams = new Dictionary<string, SqlParameter>();
+            var sqlText = sql.ToUpper();
+            
+            // Look for parameters with OUTPUT keyword
+            var lines = sql.Split('\n');
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                var upperTrimmed = trimmed.ToUpper();
+                
+                // Look for parameter = @variable OUTPUT pattern
+                if (upperTrimmed.Contains("OUTPUT") || upperTrimmed.Contains("OUT"))
+                {
+                    // Extract parameter names before OUTPUT keyword
+                    var parts = trimmed.Split('=');
+                    if (parts.Length >= 2)
+                    {
+                        var rightSide = parts[1].Trim();
+                        var paramMatch = rightSide.Split(' ', '\t')[0].Trim();
+                        
+                        if (paramMatch.StartsWith("@") && !outputParams.ContainsKey(paramMatch))
+                        {
+                            var param = new SqlParameter(paramMatch, SqlDbType.NVarChar, -1)
+                            {
+                                Direction = ParameterDirection.Output
+                            };
+                            command.Parameters.Add(param);
+                            outputParams[paramMatch] = param;
+                        }
+                    }
+                }
+            }
+
             // Register cancellation to cancel the SQL command on the server
             await using var registration = cancellationToken.Register(() =>
             {
@@ -144,15 +179,41 @@ internal class Program
                 
             } while (await reader.NextResultAsync(cancellationToken));
 
+            // Close the reader to access output parameters
+            await reader.CloseAsync();
+
+            // Collect output parameter values
+            Dictionary<string, string?>? outputParamValues = null;
+            if (outputParams.Count > 0)
+            {
+                outputParamValues = new Dictionary<string, string?>();
+                foreach (var (paramName, param) in outputParams)
+                {
+                    var value = param.Value;
+                    string? stringValue = null;
+                    if (value != null && value != DBNull.Value)
+                    {
+                        stringValue = value switch
+                        {
+                            DateTime dt => dt.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+                            DateTimeOffset dto => dto.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+                            _ => value.ToString()
+                        };
+                    }
+                    outputParamValues[paramName] = stringValue;
+                }
+            }
+
             // Output the results
-            if (resultSets.Count > 0)
+            if (resultSets.Count > 0 || outputParamValues != null)
             {
                 var resultData = new SqlResultData
                 {
                     Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
                     Type = "results",
                     ResultSets = resultSets,
-                    TotalResultSets = resultSets.Count
+                    TotalResultSets = resultSets.Count,
+                    OutputParameters = outputParamValues
                 };
 
                 var json = JsonSerializer.Serialize(resultData, EventDataContext.Default.SqlResultData);
@@ -304,6 +365,10 @@ public class SqlResultData
     [JsonPropertyName("resultSets")] public List<SqlResultSet> ResultSets { get; set; } = new();
 
     [JsonPropertyName("totalResultSets")] public int TotalResultSets { get; set; }
+
+    [JsonPropertyName("outputParameters")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string?>? OutputParameters { get; set; }
 }
 
 [JsonSerializable(typeof(EventData))]
