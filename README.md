@@ -121,10 +121,10 @@ cat test-progress.sql | sql-info-streamer -c "your-connection-string"
 ./build.sh
 ```
 
-This creates ready-to-deploy binaries in the project root:
-- `sql-info-streamer-linux-x64` - Linux x64 (servers, containers)
-- `sql-info-streamer-linux-arm64` - Linux ARM64 (Raspberry Pi, ARM servers)
-- `sql-info-streamer-macos-arm64` - macOS ARM64 (if running on macOS with .NET SDK)
+This creates ready-to-deploy binaries in the `build/` directory:
+- `build/sql-info-streamer-linux-x64` - Linux x64 (servers, containers)
+- `build/sql-info-streamer-linux-arm64` - Linux ARM64 (Raspberry Pi, ARM servers)
+- `build/sql-info-streamer-macos-arm64` - macOS ARM64 (if running on macOS with .NET SDK)
 
 ### What the Build Does
 
@@ -141,7 +141,7 @@ It's not enough to install .NET 9 SDK, Microsoft VisualStudio 2022 is also requi
 with the "Desktop development with C++" workload.
 
 ```cmd
-dotnet publish -c Release -r win-x64 --self-contained -o .
+dotnet publish SqlInfoStreamer/SqlInfoStreamer.csproj -c Release -r win-x64 --self-contained -o build
 ```
 
 **For macOS arm64 builds** (run on macOS):
@@ -149,5 +149,5 @@ dotnet publish -c Release -r win-x64 --self-contained -o .
 Install the .NET 9 SDK.
 
 ```bash
-dotnet publish -c Release -r osx-arm64 --self-contained -o .
+dotnet publish SqlInfoStreamer/SqlInfoStreamer.csproj -c Release -r osx-arm64 --self-contained -o build
 ```
