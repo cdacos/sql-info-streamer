@@ -1,6 +1,7 @@
 #region
 
 using System.Data;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -8,16 +9,51 @@ using Microsoft.Data.SqlClient;
 
 #endregion
 
+[assembly: InternalsVisibleTo("SqlInfoStreamer.Tests")]
+
 namespace SqlInfoStreamer;
 
+// ReSharper disable MemberCanBePrivate.Global
 // ReSharper disable once ClassNeverInstantiated.Global
+// ReSharper disable AccessToDisposedClosure
 internal class Program
 {
     // Compiled regex for detecting OUTPUT parameters in SQL
-    private static readonly Regex OutputParameterRegex = new(
-        @"(@\w+)\s*OUTPUT\b", 
+    internal static readonly Regex OutputParameterRegex = new(
+        @"(?<pre>^.*?)(?<param>@\w+)\s*OUTPUT\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline
     );
+
+    /// <summary>
+    ///     Extracts output parameter names from SQL text, filtering out those in comments or quoted strings
+    /// </summary>
+    /// <param name="sql">The SQL text to analyze</param>
+    /// <returns>List of unique output parameter names found</returns>
+    internal static List<string> ExtractOutputParameters(string sql)
+    {
+        var outputParams = new HashSet<string>();
+        var matches = OutputParameterRegex.Matches(sql);
+
+        foreach (Match match in matches)
+        {
+            var preText = match.Groups["pre"].Value;
+            var paramName = match.Groups["param"].Value;
+
+            // Skip if this match is in a comment (line starts with --)
+            if (preText.Contains("--"))
+                continue;
+
+            // Skip if this match is inside a quoted string (odd number of single quotes before it)
+            var quoteCount = preText.Count(c => c == '\'');
+            if (quoteCount % 2 == 1)
+                continue;
+
+            outputParams.Add(paramName);
+        }
+
+        return outputParams.ToList();
+    }
+
     private static async Task<int> Main(string[] args)
     {
         // Setup cancellation for Ctrl+C
@@ -69,7 +105,8 @@ internal class Program
         }
     }
 
-    private static async Task ExecuteSqlWithInfoMessages(string connectionString, string sql, int timeoutSeconds, CancellationToken cancellationToken = default)
+    private static async Task ExecuteSqlWithInfoMessages(string connectionString, string sql, int timeoutSeconds,
+        CancellationToken cancellationToken = default)
     {
         await using var connection = new SqlConnection(connectionString);
 
@@ -87,23 +124,18 @@ internal class Program
             await using var command = new SqlCommand(sql, connection);
             command.CommandTimeout = timeoutSeconds;
 
-            // Use regex to identify output parameters in SQL
+            // Use helper method to identify output parameters in SQL
+            var outputParamNames = ExtractOutputParameters(sql);
             var outputParams = new Dictionary<string, SqlParameter>();
-            var matches = OutputParameterRegex.Matches(sql);
-            
-            foreach (Match match in matches)
+
+            foreach (var paramName in outputParamNames)
             {
-                var paramName = match.Groups[1].Value; // The captured @parameter group
-                
-                if (!outputParams.ContainsKey(paramName))
+                var param = new SqlParameter(paramName, SqlDbType.NVarChar, -1)
                 {
-                    var param = new SqlParameter(paramName, SqlDbType.NVarChar, -1)
-                    {
-                        Direction = ParameterDirection.Output
-                    };
-                    command.Parameters.Add(param);
-                    outputParams[paramName] = param;
-                }
+                    Direction = ParameterDirection.Output
+                };
+                command.Parameters.Add(param);
+                outputParams[paramName] = param;
             }
 
             // Register cancellation to cancel the SQL command on the server
@@ -123,23 +155,20 @@ internal class Program
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
             var resultSets = new List<SqlResultSet>();
-            
+
             // Process all result sets and collect data
             do
             {
                 var resultSet = new SqlResultSet();
-                
+
                 // Get column information
-                for (int i = 0; i < reader.FieldCount; i++)
-                {
-                    resultSet.Columns.Add(reader.GetName(i));
-                }
-                
+                for (var i = 0; i < reader.FieldCount; i++) resultSet.Columns.Add(reader.GetName(i));
+
                 // Read all rows in this result set
                 while (await reader.ReadAsync(cancellationToken))
                 {
                     var row = new Dictionary<string, string?>();
-                    for (int i = 0; i < reader.FieldCount; i++)
+                    for (var i = 0; i < reader.FieldCount; i++)
                     {
                         string? value = null;
                         if (!reader.IsDBNull(i))
@@ -155,19 +184,17 @@ internal class Program
                                 _ => rawValue.ToString()
                             };
                         }
+
                         row[reader.GetName(i)] = value;
                     }
+
                     resultSet.Rows.Add(row);
                 }
-                
+
                 resultSet.RowCount = resultSet.Rows.Count;
-                
+
                 // Only add result sets that have columns (ignore empty result sets from statements like USE database)
-                if (resultSet.Columns.Count > 0)
-                {
-                    resultSets.Add(resultSet);
-                }
-                
+                if (resultSet.Columns.Count > 0) resultSets.Add(resultSet);
             } while (await reader.NextResultAsync(cancellationToken));
 
             // Close the reader to access output parameters
@@ -183,14 +210,12 @@ internal class Program
                     var value = param.Value;
                     string? stringValue = null;
                     if (value != null && value != DBNull.Value)
-                    {
                         stringValue = value switch
                         {
                             DateTime dt => dt.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
                             DateTimeOffset dto => dto.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
                             _ => value.ToString()
                         };
-                    }
                     outputParamValues[paramName] = stringValue;
                 }
             }
@@ -209,7 +234,7 @@ internal class Program
 
                 var json = JsonSerializer.Serialize(resultData, EventDataContext.Default.SqlResultData);
                 Console.WriteLine(json);
-                Console.Out.Flush();
+                await Console.Out.FlushAsync(cancellationToken);
             }
 
             WriteEvent("completed", "SQL execution completed successfully");
