@@ -4,8 +4,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SqlInfoStreamer", "SqlInfoS
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SqlInfoStreamer.Tests", "SqlInfoStreamer.Tests\SqlInfoStreamer.Tests.csproj", "{C27178CD-C1EE-4D20-9C5D-008148BC28D9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SqlInfoStreamer", "SqlInfoStreamer\SqlInfoStreamer.csproj", "{BA15821C-B086-45C6-AB45-7D2FD37CBF88}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
