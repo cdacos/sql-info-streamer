@@ -241,7 +241,15 @@ internal class Program
         }
         catch (SqlException ex)
         {
-            WriteEvent("error", $"SQL Error: {ex.Message}", ex.Class, ex.Number);
+            var errorDetails = $"SQL Error: {ex.Message}";
+            if (ex.LineNumber > 0)
+                errorDetails += $" (Line: {ex.LineNumber})";
+            if (!string.IsNullOrEmpty(ex.Procedure))
+                errorDetails += $" (Procedure: {ex.Procedure})";
+            if (ex.State > 0)
+                errorDetails += $" (State: {ex.State})";
+            
+            WriteEvent("error", errorDetails, ex.Class, ex.Number);
             throw;
         }
         catch (Exception ex)
