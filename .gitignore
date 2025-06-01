@@ -1,6 +1,5 @@
 .*/
-bin/
-obj/
-sql-info-streamer-*
-/win-x64/
-/SqlInfoStreamer-win-x64.zip
+**/bin/
+**/obj/
+build/
+*.user
