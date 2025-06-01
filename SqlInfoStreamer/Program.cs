@@ -154,17 +154,24 @@ internal class Program
 
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
-            var resultSets = new List<SqlResultSet>();
+            var resultSetIndex = 0;
 
-            // Process all result sets and collect data
+            // Process all result sets and stream data
             do
             {
-                var resultSet = new SqlResultSet();
+                // Skip empty result sets (from statements like USE database)
+                if (reader.FieldCount == 0)
+                    continue;
 
-                // Get column information
-                for (var i = 0; i < reader.FieldCount; i++) resultSet.Columns.Add(reader.GetName(i));
+                // Get column information and emit result set start event
+                var columns = new List<string>();
+                for (var i = 0; i < reader.FieldCount; i++) 
+                    columns.Add(reader.GetName(i));
 
-                // Read all rows in this result set
+                await WriteResultSetStart(resultSetIndex, columns, cancellationToken);
+
+                // Stream rows one by one
+                var rowIndex = 0;
                 while (await reader.ReadAsync(cancellationToken))
                 {
                     var row = new Dictionary<string, string?>();
@@ -188,13 +195,12 @@ internal class Program
                         row[reader.GetName(i)] = value;
                     }
 
-                    resultSet.Rows.Add(row);
+                    await WriteRow(resultSetIndex, rowIndex, row, cancellationToken);
+                    rowIndex++;
                 }
 
-                resultSet.RowCount = resultSet.Rows.Count;
-
-                // Only add result sets that have columns (ignore empty result sets from statements like USE database)
-                if (resultSet.Columns.Count > 0) resultSets.Add(resultSet);
+                await WriteResultSetEnd(resultSetIndex, rowIndex, cancellationToken);
+                resultSetIndex++;
             } while (await reader.NextResultAsync(cancellationToken));
 
             // Close the reader to access output parameters
@@ -220,21 +226,10 @@ internal class Program
                 }
             }
 
-            // Output the results
-            if (resultSets.Count > 0 || outputParamValues != null)
+            // Output parameters if any exist
+            if (outputParamValues != null)
             {
-                var resultData = new SqlResultData
-                {
-                    Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
-                    Type = "results",
-                    ResultSets = resultSets,
-                    TotalResultSets = resultSets.Count,
-                    OutputParameters = outputParamValues
-                };
-
-                var json = JsonSerializer.Serialize(resultData, EventDataContext.Default.SqlResultData);
-                Console.WriteLine(json);
-                await Console.Out.FlushAsync(cancellationToken);
+                await WriteOutputParameters(outputParamValues, cancellationToken);
             }
 
             WriteEvent("completed", "SQL execution completed successfully");
@@ -246,7 +241,15 @@ internal class Program
         }
         catch (SqlException ex)
         {
-            WriteEvent("error", $"SQL Error: {ex.Message}", ex.Class, ex.Number);
+            var errorDetails = $"SQL Error: {ex.Message}";
+            if (ex.LineNumber > 0)
+                errorDetails += $" (Line: {ex.LineNumber})";
+            if (!string.IsNullOrEmpty(ex.Procedure))
+                errorDetails += $" (Procedure: {ex.Procedure})";
+            if (ex.State > 0)
+                errorDetails += $" (State: {ex.State})";
+            
+            WriteEvent("error", errorDetails, ex.Class, ex.Number);
             throw;
         }
         catch (Exception ex)
@@ -254,6 +257,66 @@ internal class Program
             WriteEvent("error", $"Execution failed: {ex.Message}");
             throw;
         }
+    }
+
+    private static async Task WriteResultSetStart(int resultSetIndex, List<string> columns, CancellationToken cancellationToken = default)
+    {
+        var data = new ResultSetStartData
+        {
+            Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+            Type = "result_set_start",
+            ResultSetIndex = resultSetIndex,
+            Columns = columns
+        };
+
+        var json = JsonSerializer.Serialize(data, EventDataContext.Default.ResultSetStartData);
+        Console.WriteLine(json);
+        await Console.Out.FlushAsync(cancellationToken);
+    }
+
+    private static async Task WriteRow(int resultSetIndex, int rowIndex, Dictionary<string, string?> row, CancellationToken cancellationToken = default)
+    {
+        var data = new RowData
+        {
+            Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+            Type = "row",
+            ResultSetIndex = resultSetIndex,
+            RowIndex = rowIndex,
+            Data = row
+        };
+
+        var json = JsonSerializer.Serialize(data, EventDataContext.Default.RowData);
+        Console.WriteLine(json);
+        await Console.Out.FlushAsync(cancellationToken);
+    }
+
+    private static async Task WriteResultSetEnd(int resultSetIndex, int totalRows, CancellationToken cancellationToken = default)
+    {
+        var data = new ResultSetEndData
+        {
+            Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+            Type = "result_set_end",
+            ResultSetIndex = resultSetIndex,
+            TotalRows = totalRows
+        };
+
+        var json = JsonSerializer.Serialize(data, EventDataContext.Default.ResultSetEndData);
+        Console.WriteLine(json);
+        await Console.Out.FlushAsync(cancellationToken);
+    }
+
+    private static async Task WriteOutputParameters(Dictionary<string, string?> outputParameters, CancellationToken cancellationToken = default)
+    {
+        var data = new OutputParametersData
+        {
+            Timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+            Type = "output_parameters",
+            OutputParameters = outputParameters
+        };
+
+        var json = JsonSerializer.Serialize(data, EventDataContext.Default.OutputParametersData);
+        Console.WriteLine(json);
+        await Console.Out.FlushAsync(cancellationToken);
     }
 
     private static void WriteEvent(string type, string message, byte? severity = null, int? errorNumber = null)
@@ -363,6 +426,50 @@ public class EventData
     public SqlResultSet? ResultSet { get; set; }
 }
 
+public class ResultSetStartData
+{
+    [JsonPropertyName("timestamp")] public string Timestamp { get; set; } = "";
+
+    [JsonPropertyName("type")] public string Type { get; set; } = "";
+
+    [JsonPropertyName("resultSetIndex")] public int ResultSetIndex { get; set; }
+
+    [JsonPropertyName("columns")] public List<string> Columns { get; set; } = new();
+}
+
+public class RowData
+{
+    [JsonPropertyName("timestamp")] public string Timestamp { get; set; } = "";
+
+    [JsonPropertyName("type")] public string Type { get; set; } = "";
+
+    [JsonPropertyName("resultSetIndex")] public int ResultSetIndex { get; set; }
+
+    [JsonPropertyName("rowIndex")] public int RowIndex { get; set; }
+
+    [JsonPropertyName("data")] public Dictionary<string, string?> Data { get; set; } = new();
+}
+
+public class ResultSetEndData
+{
+    [JsonPropertyName("timestamp")] public string Timestamp { get; set; } = "";
+
+    [JsonPropertyName("type")] public string Type { get; set; } = "";
+
+    [JsonPropertyName("resultSetIndex")] public int ResultSetIndex { get; set; }
+
+    [JsonPropertyName("totalRows")] public int TotalRows { get; set; }
+}
+
+public class OutputParametersData
+{
+    [JsonPropertyName("timestamp")] public string Timestamp { get; set; } = "";
+
+    [JsonPropertyName("type")] public string Type { get; set; } = "";
+
+    [JsonPropertyName("outputParameters")] public Dictionary<string, string?> OutputParameters { get; set; } = new();
+}
+
 public class SqlResultSet
 {
     [JsonPropertyName("columns")] public List<string> Columns { get; set; } = new();
@@ -390,6 +497,10 @@ public class SqlResultData
 [JsonSerializable(typeof(EventData))]
 [JsonSerializable(typeof(SqlResultSet))]
 [JsonSerializable(typeof(SqlResultData))]
+[JsonSerializable(typeof(ResultSetStartData))]
+[JsonSerializable(typeof(RowData))]
+[JsonSerializable(typeof(ResultSetEndData))]
+[JsonSerializable(typeof(OutputParametersData))]
 internal partial class EventDataContext : JsonSerializerContext
 {
 }
