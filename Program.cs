@@ -3,6 +3,7 @@
 using System.Data;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 
 #endregion
@@ -12,6 +13,11 @@ namespace SqlInfoStreamer;
 // ReSharper disable once ClassNeverInstantiated.Global
 internal class Program
 {
+    // Compiled regex for detecting OUTPUT parameters in SQL
+    private static readonly Regex OutputParameterRegex = new(
+        @"(@\w+)\s*OUTPUT\b", 
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline
+    );
     private static async Task<int> Main(string[] args)
     {
         // Setup cancellation for Ctrl+C
@@ -81,37 +87,22 @@ internal class Program
             await using var command = new SqlCommand(sql, connection);
             command.CommandTimeout = timeoutSeconds;
 
-            // Pre-parse SQL to identify output parameters
+            // Use regex to identify output parameters in SQL
             var outputParams = new Dictionary<string, SqlParameter>();
-            var sqlText = sql.ToUpper();
+            var matches = OutputParameterRegex.Matches(sql);
             
-            // Look for parameters with OUTPUT keyword
-            var lines = sql.Split('\n');
-            foreach (var line in lines)
+            foreach (Match match in matches)
             {
-                var trimmed = line.Trim();
-                var upperTrimmed = trimmed.ToUpper();
+                var paramName = match.Groups[1].Value; // The captured @parameter group
                 
-                // Look for parameter = @variable OUTPUT pattern
-                if (upperTrimmed.Contains("OUTPUT") || upperTrimmed.Contains("OUT"))
+                if (!outputParams.ContainsKey(paramName))
                 {
-                    // Extract parameter names before OUTPUT keyword
-                    var parts = trimmed.Split('=');
-                    if (parts.Length >= 2)
+                    var param = new SqlParameter(paramName, SqlDbType.NVarChar, -1)
                     {
-                        var rightSide = parts[1].Trim();
-                        var paramMatch = rightSide.Split(' ', '\t')[0].Trim();
-                        
-                        if (paramMatch.StartsWith("@") && !outputParams.ContainsKey(paramMatch))
-                        {
-                            var param = new SqlParameter(paramMatch, SqlDbType.NVarChar, -1)
-                            {
-                                Direction = ParameterDirection.Output
-                            };
-                            command.Parameters.Add(param);
-                            outputParams[paramMatch] = param;
-                        }
-                    }
+                        Direction = ParameterDirection.Output
+                    };
+                    command.Parameters.Add(param);
+                    outputParams[paramName] = param;
                 }
             }
 
